@@ -1,50 +1,34 @@
-# You can visit https://developer.android.google.cn/studio/projects/configure-cmake?hl=zh_cn
-# for more information about CMake and how to use it in Android projects.
-
-
-# Sets the minimum version of CMake required to build your native library.
-# This ensures that a certain set of CMake features is available to
-# your build.
-
-# 一定要用高版本的，不然jni.h的冲突解决不了，试了很多方案
-cmake_minimum_required(VERSION 3.31.1)
+cmake_minimum_required(VERSION 3.22.1)
 
 project(player)
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_VERBOSE_MAKEFILE ON)
 
-# Specifies a library name, specifies whether the library is STATIC or
-# SHARED, and provides relative paths to the source code. You can
-# define multiple libraries by adding multiple add_library() commands,
-# and CMake builds them for you. When you build your app, Gradle
-# automatically packages shared libraries with your APK.
-
+# 系统 JNI 头文件路径，优先级最高，必须先加入以避免 jni.h 冲突
 set(SYSTEM_INCLUDE_DIRS
         ${ANDROID_NDK}/sysroot/usr/include
         ${ANDROID_NDK}/sysroot/usr/include/${ANDROID_ABI}
 )
 
-# for ffmpeg
-
+# FFmpeg 预编译 so 存放目录（按 ABI 分类）
 set(JNI_LIBS_DIR ${CMAKE_SOURCE_DIR}/../jniLibs)
-
-# 根据当前ABI设置库路径
 set(LIB_DIR ${JNI_LIBS_DIR}/${ANDROID_ABI})
 
-# 指定生成的库名称和类型，添加源文件
+# 源文件构建本地库
 add_library(player-native
         SHARED
         ffmpeg_jni.cpp
         VLog.cpp
 )
 
-# 3. 关键步骤：将系统路径插入到搜索列表最前面
+# 1. 设置系统 include，使用 BEFORE 确保优先级，避免 jni.h 被 FFmpeg 的 jni.h 干扰
 target_include_directories(player-native
-        BEFORE PRIVATE          # BEFORE 确保最高优先级
+        BEFORE
+        PRIVATE
         ${SYSTEM_INCLUDE_DIRS}
-        SYSTEM                 # 标记为系统目录（抑制警告）
 )
 
+# 2. 加载 FFmpeg 的 so 库
 link_directories(${LIB_DIR})
 
 add_library(avcodec SHARED IMPORTED)
@@ -65,24 +49,21 @@ set_target_properties(swscale PROPERTIES IMPORTED_LOCATION ${LIB_DIR}/libswscale
 add_library(swresample SHARED IMPORTED)
 set_target_properties(swresample PROPERTIES IMPORTED_LOCATION ${LIB_DIR}/libswresample.so)
 
+# 3. 设置 FFmpeg 头文件路径（注意不要把 libavcodec 加到顶级路径以免污染）
 set(FFMPEG_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/include/third_party/ffmpeg)
 
-# 文件不会递归，需要手动添加
-target_include_directories(native-lib
+target_include_directories(player-native
         PRIVATE
-        ${CMAKE_SOURCE_DIR}/include
-        ${FFMPEG_INCLUDE_DIR}
-        ${FFMPEG_INCLUDE_DIR}/log
-        # Include directories for FFmpeg
-        ${FFMPEG_INCLUDE_DIR}/libavutil
-        ${FFMPEG_INCLUDE_DIR}/libavcodec
-        ${FFMPEG_INCLUDE_DIR}/libavformat
-        ${FFMPEG_INCLUDE_DIR}/libavfilter
-        ${FFMPEG_INCLUDE_DIR}/libswscale
-        ${FFMPEG_INCLUDE_DIR}/libswresample
+        ${CMAKE_SOURCE_DIR}/include                # 你项目自己的头文件
+        ${FFMPEG_INCLUDE_DIR}                      # FFmpeg 根目录
+#        ${FFMPEG_INCLUDE_DIR}/log                  # 你的日志模块
+        # ⚠️ 不要包含 ${FFMPEG_INCLUDE_DIR}/libavcodec... 作为全局路径
+        # 如需要 avcodec/jni.h，请在 cpp 文件中显式 #include "libavcodec/jni.h"
 )
 
-target_link_libraries(player-native
+# 4. 链接本地库和系统库
+target_link_libraries(
+        player-native
         log
         avcodec
         avfilter
